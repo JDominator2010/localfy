@@ -1844,7 +1844,7 @@ class PlayerEngine {
    === ROUTER ===
    ============================================================ */
 
-class Router {
+class RouterClass {
   constructor() {
     this.history = [];
     this.cursor = -1;
@@ -3005,8 +3005,7 @@ const UI = {
 
 const Library = new LibraryManager();
 const Player = new PlayerEngine(document.getElementById('audio'));
-const RouterInstance = new Router();
-window.Router = RouterInstance;
+const Router = new RouterClass();
 
 function bootstrap() {
   Library.load();
