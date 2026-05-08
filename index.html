@@ -500,6 +500,31 @@ a { color: inherit; text-decoration: none; }
   overflow: hidden;
 }
 
+.sidebar-create-playlist {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px;
+  margin: 0 8px 8px;
+  background: rgba(255,255,255,0.05);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background var(--transition-base);
+  color: var(--text-base);
+  text-align: left;
+  width: calc(100% - 16px);
+}
+.sidebar-create-playlist:hover { background: rgba(255,255,255,0.1); }
+.sidebar-create-playlist .plus-icon {
+  width: 32px; height: 32px;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.15);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.sidebar-create-playlist .plus-icon svg { width: 16px; height: 16px; color: var(--text-base); }
+.sidebar-create-playlist .cp-label { font-size: 14px; font-weight: 700; }
+
 /* === DETAIL HEADER (playlist/album/artist) === */
 .detail-header {
   display: flex;
@@ -2071,6 +2096,11 @@ const UI = {
 
   refreshSidebar() {
     const root = document.getElementById('sidebar-playlists');
+    const createCTA = `
+      <button class="sidebar-create-playlist" id="sidebar-cp-cta">
+        <div class="plus-icon"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M15.25 8a.75.75 0 01-.75.75H8.75v5.75a.75.75 0 01-1.5 0V8.75H1.5a.75.75 0 010-1.5h5.75V1.5a.75.75 0 011.5 0v5.75h5.75a.75.75 0 01.75.75z"/></svg></div>
+        <div class="cp-label">Create Playlist</div>
+      </button>`;
     const liked = `
       <div class="sidebar-playlist" data-id="liked" data-route="liked">
         <div class="sidebar-playlist-art liked">
@@ -2093,7 +2123,9 @@ const UI = {
           </div>
         </div>`;
     }).join('');
-    root.innerHTML = liked + playlists;
+    root.innerHTML = createCTA + liked + playlists;
+    const cta = root.querySelector('#sidebar-cp-cta');
+    if (cta) cta.addEventListener('click', () => UI._promptCreatePlaylist());
     root.querySelectorAll('.sidebar-playlist').forEach(el => {
       el.addEventListener('click', () => {
         if (el.dataset.id === 'liked') Router.navigate('liked');
@@ -2424,25 +2456,30 @@ const UI = {
       });
       bodyHTML = `<div style="margin-top:16px;">${this._renderInlineTracklist(sorted, sorted, true)}</div>`;
     } else if (tab === 'playlists') {
-      const items = [{ type: 'liked-card' }, ...Library.playlists.map(p => ({ type: 'playlist', p }))];
-      bodyHTML = `<div class="card-grid">${items.map(it => {
-        if (it.type === 'liked-card') {
-          return `<div class="card" data-route="liked">
-            <div class="card-art-wrap"><div class="card-art" style="background:var(--liked-gradient); display:flex; align-items:center; justify-content:center;">
-              <svg viewBox="0 0 16 16" width="48" height="48" fill="#fff"><path d="M15.724 4.22A4.313 4.313 0 0012.192.814a4.269 4.269 0 00-3.622 1.13.837.837 0 01-1.14 0 4.272 4.272 0 00-6.21 5.855l5.916 7.05a1.128 1.128 0 001.727 0l5.916-7.05a4.228 4.228 0 00.945-3.577z"/></svg>
-            </div></div>
-            <div class="card-title">Liked Songs</div>
-            <div class="card-subtitle">${Library.liked.size} song${Library.liked.size === 1 ? '' : 's'}</div>
-          </div>`;
-        }
-        const ft = it.p.trackIds.map(id => Library.getTrack(id)).find(Boolean);
-        const bg = ft ? GradientGen.bgStyleFor(ft) : `background:${GradientGen.forSeed(it.p.name)};`;
-        return `<div class="card" data-route="playlist" data-id="${escapeAttr(it.p.id)}">
+      const newCard = `<div class="card" id="lib-create-pl">
+        <div class="card-art-wrap"><div class="card-art" style="background:rgba(255,255,255,0.08); display:flex; align-items:center; justify-content:center;">
+          <svg viewBox="0 0 24 24" width="48" height="48" fill="rgba(255,255,255,0.7)"><path d="M12 4a1 1 0 011 1v6h6a1 1 0 110 2h-6v6a1 1 0 11-2 0v-6H5a1 1 0 110-2h6V5a1 1 0 011-1z"/></svg>
+        </div></div>
+        <div class="card-title">Create playlist</div>
+        <div class="card-subtitle">Build a new mix from your library</div>
+      </div>`;
+      const likedCard = `<div class="card" data-route="liked">
+        <div class="card-art-wrap"><div class="card-art" style="background:var(--liked-gradient); display:flex; align-items:center; justify-content:center;">
+          <svg viewBox="0 0 16 16" width="48" height="48" fill="#fff"><path d="M15.724 4.22A4.313 4.313 0 0012.192.814a4.269 4.269 0 00-3.622 1.13.837.837 0 01-1.14 0 4.272 4.272 0 00-6.21 5.855l5.916 7.05a1.128 1.128 0 001.727 0l5.916-7.05a4.228 4.228 0 00.945-3.577z"/></svg>
+        </div></div>
+        <div class="card-title">Liked Songs</div>
+        <div class="card-subtitle">${Library.liked.size} song${Library.liked.size === 1 ? '' : 's'}</div>
+      </div>`;
+      const playlistCards = Library.playlists.map(p => {
+        const ft = p.trackIds.map(id => Library.getTrack(id)).find(Boolean);
+        const bg = ft ? GradientGen.bgStyleFor(ft) : `background:${GradientGen.forSeed(p.name)};`;
+        return `<div class="card" data-route="playlist" data-id="${escapeAttr(p.id)}">
           <div class="card-art-wrap"><div class="card-art" style="${bg}"></div></div>
-          <div class="card-title">${escapeHtml(it.p.name)}</div>
-          <div class="card-subtitle">${it.p.trackIds.length} song${it.p.trackIds.length === 1 ? '' : 's'}</div>
+          <div class="card-title">${escapeHtml(p.name)}</div>
+          <div class="card-subtitle">${p.trackIds.length} song${p.trackIds.length === 1 ? '' : 's'}</div>
         </div>`;
-      }).join('')}</div>`;
+      }).join('');
+      bodyHTML = `<div class="card-grid">${newCard}${likedCard}${playlistCards}</div>`;
     } else if (tab === 'albums') {
       const albums = Library.groupByAlbum().sort((a, b) => a.album.localeCompare(b.album));
       bodyHTML = `<div class="card-grid">${this._cardRow(albums.map(a => ({ type: 'album', id: `${a.album}__${a.artist}`, title: a.album, subtitle: a.artist, art: a.tracks[0] })))}</div>`;
@@ -2457,6 +2494,8 @@ const UI = {
     this._wireCards();
     this.viewRoot.querySelectorAll('[data-route="liked"]').forEach(el => el.addEventListener('click', () => Router.navigate('liked')));
     this.viewRoot.querySelectorAll('[data-route="playlist"]').forEach(el => el.addEventListener('click', () => Router.navigate('playlist', { playlistId: el.dataset.id })));
+    const libCreatePl = this.viewRoot.querySelector('#lib-create-pl');
+    if (libCreatePl) libCreatePl.addEventListener('click', () => UI._promptCreatePlaylist());
     if (tab === 'all') {
       this._wireTrackRows(this.viewRoot);
       this.viewRoot.querySelectorAll('.tracklist-header > div[data-sort]').forEach(h => {
@@ -2937,14 +2976,7 @@ const UI = {
     document.querySelector('.sidebar-library-title').onclick = () => Router.navigate('library');
 
     document.getElementById('btn-pick-folder').onclick = () => Library.pickFolder();
-    document.getElementById('btn-create-playlist').onclick = () => {
-      Modal.show({ title: 'Create new playlist', placeholder: 'My Playlist', defaultValue: 'My Playlist #' + (Library.playlists.length + 1), onConfirm: name => {
-        if (!name) return;
-        const p = Library.createPlaylist(name);
-        UI.refreshSidebar();
-        Router.navigate('playlist', { playlistId: p.id });
-      } });
-    };
+    document.getElementById('btn-create-playlist').onclick = () => UI._promptCreatePlaylist();
 
     // Avatar dropdown
     const dd = document.getElementById('avatar-dropdown');
@@ -2981,6 +3013,21 @@ const UI = {
       const t = Player.current();
       if (t) Router.navigate('artist', { artistName: t.artist });
     };
+  },
+
+  _promptCreatePlaylist() {
+    Modal.show({
+      title: 'Create new playlist',
+      placeholder: 'My Playlist',
+      defaultValue: 'My Playlist #' + (Library.playlists.length + 1),
+      confirmText: 'Create',
+      onConfirm: name => {
+        if (!name) return;
+        const p = Library.createPlaylist(name);
+        UI.refreshSidebar();
+        Router.navigate('playlist', { playlistId: p.id });
+      },
+    });
   },
 
   _setupKeyboard() {
