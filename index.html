@@ -1515,13 +1515,13 @@ class LibraryManager {
     let file = handle;
     if (handle.kind === 'file' && handle.getFile) {
       try {
-        const perm = await handle.queryPermission ? await handle.queryPermission({ mode: 'read' }) : 'granted';
+        const perm = handle.queryPermission ? await handle.queryPermission({ mode: 'read' }) : 'granted';
         if (perm !== 'granted' && handle.requestPermission) {
           const r = await handle.requestPermission({ mode: 'read' });
           if (r !== 'granted') return null;
         }
         file = await handle.getFile();
-      } catch (e) { return null; }
+      } catch (e) { console.warn('getPlayableSource failed', e); return null; }
     }
     const url = URL.createObjectURL(file);
     this.objectURLs.set(track.id, url);
@@ -1624,11 +1624,11 @@ const GradientGen = {
     return `linear-gradient(135deg, ${a} 0%, ${b} 100%)`;
   },
   cssBgFor(track) {
-    if (track && track.art) return `url("${track.art.replace(/"/g, '\\"')}")`;
+    if (track && track.art) return `url(${track.art})`;
     return this.forSeed((track && (track.title + (track.album || ''))) || 'default');
   },
   bgStyleFor(track) {
-    if (track && track.art) return `background-image: url("${track.art.replace(/"/g, '\\"')}");`;
+    if (track && track.art) return `background-image: url(${track.art});`;
     return `background: ${this.forSeed((track && (track.title + (track.album || ''))) || 'default')};`;
   },
 };
@@ -1658,7 +1658,7 @@ class PlayerEngine {
   _loadState() {
     try {
       const s = JSON.parse(localStorage.getItem(STORAGE_KEYS.state) || '{}');
-      this.volume = typeof s.volume === 'number' ? s.volume : 0.7;
+      this.volume = typeof s.volume === 'number' ? s.volume : 1.0;
       this.shuffle = !!s.shuffle;
       this.repeat = s.repeat || 'off';
       this.lastTrackId = s.lastTrackId || null;
@@ -1750,13 +1750,17 @@ class PlayerEngine {
     if (this.audio.src !== src) {
       this.audio.src = src;
     }
+    this.audio.muted = false;
+    this.audio.volume = this.muted ? 0 : this.volume;
     try {
       await this.audio.play();
       Library.addRecentlyPlayed(t.id);
       UI.refreshNowPlaying();
       UI.refreshTrackHighlight();
+      if (this.audio.volume < 0.05 && !this.muted) Toast.show('Volume is very low — drag the slider up');
     } catch (e) {
       console.warn('Play failed', e);
+      Toast.show('Could not play this track: ' + (e.message || e.name || 'unknown'));
     }
   }
 
