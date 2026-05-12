@@ -1026,9 +1026,38 @@ a { color: inherit; text-decoration: none; }
   display: flex; align-items: center; gap: 12px;
   padding: 8px; border-radius: 4px;
   cursor: pointer;
+  position: relative;
 }
 .queue-item:hover { background: rgba(255,255,255,0.1); }
 .queue-item.current .queue-item-name { color: var(--spotify-green); }
+.queue-item.dragging { opacity: 0.4; }
+.queue-item.drop-above::before,
+.queue-item.drop-below::after {
+  content: ''; position: absolute; left: 0; right: 0;
+  height: 2px; background: var(--spotify-green); pointer-events: none;
+}
+.queue-item.drop-above::before { top: -1px; }
+.queue-item.drop-below::after { bottom: -1px; }
+.queue-item-remove {
+  display: none; color: var(--text-subdued);
+  width: 24px; height: 24px;
+  align-items: center; justify-content: center;
+  border-radius: 50%;
+}
+.queue-item:hover .queue-item-remove { display: flex; }
+.queue-item-remove:hover { color: var(--text-base); background: rgba(255,255,255,0.1); }
+.queue-item-remove svg { width: 12px; height: 12px; }
+.queue-item-drag {
+  cursor: grab;
+  color: var(--text-subdued);
+  display: none;
+  width: 16px; height: 16px;
+  align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.queue-item-drag:active { cursor: grabbing; }
+.queue-item:hover .queue-item-drag { display: flex; }
+.queue-item-drag svg { width: 12px; height: 12px; }
 
 /* === EXPANDED NOW PLAYING === */
 .expanded-np {
@@ -1400,7 +1429,7 @@ class LibraryManager {
       try {
         const handle = await window.showDirectoryPicker();
         const files = await this.collectFromDirHandle(handle);
-        await this.ingestFiles(files, true);
+        await this.ingestFiles(files, true, handle.name);
         return files.length;
       } catch (e) {
         if (e.name !== 'AbortError') console.error(e);
@@ -1420,11 +1449,23 @@ class LibraryManager {
       input.accept = '.mp3,.flac,.m4a,.ogg,.wav,.mp4,.aac,.opus,.webm';
       input.onchange = async () => {
         const files = [...input.files].filter(f => this.isAudioFile(f.name));
-        await this.ingestFiles(files.map(f => ({ file: f, path: f.webkitRelativePath || f.name })), false);
+        const rootName = files[0]?.webkitRelativePath?.split('/')[0] || '';
+        await this.ingestFiles(files.map(f => ({ file: f, path: f.webkitRelativePath || f.name })), false, rootName);
         resolve(files.length);
       };
       input.click();
     });
+  }
+
+  _playlistNameFromPath(path, rootName) {
+    if (!path) return null;
+    const parts = path.split('/').filter(Boolean);
+    let startIdx = 0;
+    if (rootName && parts[0] === rootName) startIdx = 1;
+    // parts[startIdx..parts.length-1] is the relative path; the last is the file.
+    // If there's at least one folder between root and file, use the first one.
+    if (parts.length - startIdx >= 2) return parts[startIdx];
+    return null;
   }
 
   async collectFromDirHandle(dirHandle, basePath = '') {
@@ -1443,15 +1484,21 @@ class LibraryManager {
     return out;
   }
 
-  async ingestFiles(items, isFSA) {
+  async ingestFiles(items, isFSA, rootName = '') {
     const banner = ScanBanner.show('Scanning library...');
     let i = 0;
+    const folderGroups = new Map();
     for (const item of items) {
       i++;
       banner.update(`Scanning ${i}/${items.length}: ${item.path.split('/').pop()}`);
       try {
         const file = isFSA ? await item.handle.getFile() : item.file;
         const id = this.hashId(item.path + '_' + file.size + '_' + file.lastModified);
+        const playlistName = this._playlistNameFromPath(item.path, rootName);
+        if (playlistName) {
+          if (!folderGroups.has(playlistName)) folderGroups.set(playlistName, []);
+          folderGroups.get(playlistName).push(id);
+        }
         if (this.tracks.some(t => t.id === id)) {
           this.fileHandles.set(id, isFSA ? item.handle : file);
           continue;
@@ -1480,10 +1527,24 @@ class LibraryManager {
         console.warn('Failed to ingest', item.path, e);
       }
     }
+    let newPlaylists = 0, updatedPlaylists = 0;
+    for (const [name, trackIds] of folderGroups) {
+      let p = this.playlists.find(pl => pl.name === name);
+      let created = false;
+      if (!p) { p = this.createPlaylist(name); created = true; }
+      const before = p.trackIds.length;
+      for (const tid of trackIds) if (!p.trackIds.includes(tid)) p.trackIds.push(tid);
+      if (created) newPlaylists++;
+      else if (p.trackIds.length > before) updatedPlaylists++;
+    }
+    if (folderGroups.size) this.savePlaylists();
     this.save();
     banner.hide();
     UI.refreshAll();
-    Toast.show(`Imported ${i} track${i === 1 ? '' : 's'}`);
+    const parts = [`Imported ${i} track${i === 1 ? '' : 's'}`];
+    if (newPlaylists) parts.push(`${newPlaylists} new playlist${newPlaylists === 1 ? '' : 's'}`);
+    if (updatedPlaylists) parts.push(`${updatedPlaylists} updated`);
+    Toast.show(parts.join(' • '));
   }
 
   extractMetadata(file) {
@@ -1866,6 +1927,22 @@ class PlayerEngine {
   addToQueueEnd(track) {
     this.queue.push(track);
     UI.refreshQueue();
+  }
+  reorderQueue(fromIdx, toIdx) {
+    if (!Number.isInteger(fromIdx) || !Number.isInteger(toIdx)) return;
+    if (fromIdx < 0 || fromIdx >= this.queue.length) return;
+    if (toIdx < 0 || toIdx > this.queue.length) return;
+    if (fromIdx === toIdx) return;
+    const [item] = this.queue.splice(fromIdx, 1);
+    const adjustedTo = toIdx > fromIdx ? toIdx - 1 : toIdx;
+    this.queue.splice(adjustedTo, 0, item);
+    if (fromIdx === this.index) this.index = adjustedTo;
+    else if (fromIdx < this.index && adjustedTo >= this.index) this.index--;
+    else if (fromIdx > this.index && adjustedTo <= this.index) this.index++;
+  }
+  removeFromQueue(idx) {
+    if (idx <= this.index || idx >= this.queue.length) return;
+    this.queue.splice(idx, 1);
   }
 }
 
@@ -2851,6 +2928,8 @@ const UI = {
     if (!panel.classList.contains('open')) return;
     const cur = Player.current();
     const next = Player.queue.slice(Player.index + 1);
+    const dragSvg = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M5 3a1 1 0 100 2 1 1 0 000-2zm0 4a1 1 0 100 2 1 1 0 000-2zm0 4a1 1 0 100 2 1 1 0 000-2zm6-8a1 1 0 100 2 1 1 0 000-2zm0 4a1 1 0 100 2 1 1 0 000-2zm0 4a1 1 0 100 2 1 1 0 000-2z"/></svg>';
+    const removeSvg = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M2.47 2.47a.75.75 0 011.06 0L8 6.94l4.47-4.47a.75.75 0 111.06 1.06L9.06 8l4.47 4.47a.75.75 0 11-1.06 1.06L8 9.06l-4.47 4.47a.75.75 0 01-1.06-1.06L6.94 8 2.47 3.53a.75.75 0 010-1.06z"/></svg>';
     const html = `
       <h2>Queue</h2>
       ${cur ? `<div class="queue-section"><h3>Now playing</h3>
@@ -2861,18 +2940,66 @@ const UI = {
             <div class="track-title-artist truncate">${escapeHtml(cur.artist)}</div>
           </div>
         </div></div>` : ''}
-      ${next.length ? `<div class="queue-section"><h3>Next up</h3>${next.map((t, i) => `
-        <div class="queue-item" data-q-idx="${Player.index + 1 + i}">
+      ${next.length ? `<div class="queue-section"><h3>Next up</h3>${next.map((t, i) => {
+        const qIdx = Player.index + 1 + i;
+        return `<div class="queue-item" data-q-idx="${qIdx}" draggable="true">
+          <span class="queue-item-drag" title="Drag to reorder">${dragSvg}</span>
           <div class="track-art" style="${GradientGen.bgStyleFor(t)}; width:40px;height:40px;"></div>
           <div style="min-width:0; flex:1;">
             <div class="queue-item-name truncate">${escapeHtml(t.title)}</div>
             <div class="track-title-artist truncate">${escapeHtml(t.artist)}</div>
           </div>
-        </div>`).join('')}</div>` : ''}
+          <button class="queue-item-remove" data-q-remove="${qIdx}" title="Remove from queue">${removeSvg}</button>
+        </div>`;
+      }).join('')}</div>` : ''}
     `;
     panel.innerHTML = html;
     panel.querySelectorAll('[data-q-idx]').forEach(el => {
-      el.addEventListener('click', () => { Player.index = parseInt(el.dataset.qIdx, 10); Player._loadAndPlay(); });
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('[data-q-remove]') || e.target.closest('.queue-item-drag')) return;
+        Player.index = parseInt(el.dataset.qIdx, 10);
+        Player._loadAndPlay();
+      });
+      el.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/queue-idx', el.dataset.qIdx);
+        e.dataTransfer.effectAllowed = 'move';
+        el.classList.add('dragging');
+      });
+      el.addEventListener('dragend', () => {
+        el.classList.remove('dragging');
+        panel.querySelectorAll('.queue-item').forEach(n => n.classList.remove('drop-above', 'drop-below'));
+      });
+      el.addEventListener('dragover', (e) => {
+        if (!e.dataTransfer.types.includes('text/queue-idx')) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const r = el.getBoundingClientRect();
+        const isAbove = e.clientY < r.top + r.height / 2;
+        el.classList.toggle('drop-above', isAbove);
+        el.classList.toggle('drop-below', !isAbove);
+      });
+      el.addEventListener('dragleave', (e) => {
+        if (!el.contains(e.relatedTarget)) el.classList.remove('drop-above', 'drop-below');
+      });
+      el.addEventListener('drop', (e) => {
+        if (!e.dataTransfer.types.includes('text/queue-idx')) return;
+        e.preventDefault();
+        const r = el.getBoundingClientRect();
+        const isAbove = e.clientY < r.top + r.height / 2;
+        el.classList.remove('drop-above', 'drop-below');
+        const fromIdx = parseInt(e.dataTransfer.getData('text/queue-idx'), 10);
+        let toIdx = parseInt(el.dataset.qIdx, 10);
+        if (!isAbove) toIdx++;
+        Player.reorderQueue(fromIdx, toIdx);
+        UI.refreshQueue();
+      });
+    });
+    panel.querySelectorAll('[data-q-remove]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        Player.removeFromQueue(parseInt(btn.dataset.qRemove, 10));
+        UI.refreshQueue();
+      });
     });
   },
 
